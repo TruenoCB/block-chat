@@ -1,0 +1,18 @@
+# 区块链节点配置文件
+
+# 节点基本信息
+node_id: "node1"  # 节点ID
+port: 8000       # P2P网络端口
+api_port: 8080   # API服务端口
+
+# 网络配置
+peers:           # 初始对等节点列表
+  - "127.0.0.1:8001"
+  - "127.0.0.1:8002"
+
+# 存储配置
+data_dir: "./data"  # 数据存储目录
+key_file: "./key.json"  # 密钥文件
+
+# 日志配置
+log_level: "info"  # 日志级别: debug, info, warn, error
