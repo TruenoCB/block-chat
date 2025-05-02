@@ -56,6 +56,46 @@ func NewBlock(index uint64, transactions []*Transaction, prevHash string, creato
 	return block
 }
 
+// SignBlock 对区块进行签名
+func (b *Block) SignBlock(privateKey string) error {
+	// 计算区块哈希
+	hash := b.CalculateHash()
+	
+	// 使用私钥对哈希进行签名
+	signature, err := Sign(privateKey, []byte(hash))
+	if err != nil {
+		return err
+	}
+	
+	// 设置区块签名
+	b.Signature = signature
+	return nil
+}
+
+// VerifyBlock 验证区块签名
+func (b *Block) VerifyBlock() bool {
+	// 如果是创世区块，不需要验证签名
+	if b.Index == 0 {
+		return true
+	}
+	
+	// 如果没有签名，验证失败
+	if b.Signature == "" {
+		return false
+	}
+	
+	// 计算区块哈希
+	hash := b.CalculateHash()
+	
+	// 使用创建者的公钥验证签名
+	valid, err := Verify(b.Creator, []byte(hash), b.Signature)
+	if err != nil {
+		return false
+	}
+	
+	return valid
+}
+
 // NewGenesisBlock 创建创世区块
 func NewGenesisBlock(creator string) *Block {
 	return NewBlock(0, []*Transaction{}, "0", creator)

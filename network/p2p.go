@@ -90,6 +90,134 @@ func (p *P2PServer) handleMessage(peer *Peer, msg *Message) error {
 	return handler(peer, msg)
 }
 
+// 注册默认消息处理器
+func (p *P2PServer) registerDefaultHandlers() {
+	// 注册Ping消息处理器
+	p.RegisterMessageHandler(MsgPing, func(peer *Peer, msg *Message) error {
+		// 收到Ping消息，回复Pong消息
+		return p.sendMessage(peer, MsgPong, nil)
+	})
+	
+	// 注册Pong消息处理器
+	p.RegisterMessageHandler(MsgPong, func(peer *Peer, msg *Message) error {
+		// 收到Pong消息，更新节点最后通信时间
+		peer.LastSeen = time.Now()
+		return nil
+	})
+	
+	// 注册节点发现消息处理器
+	p.RegisterMessageHandler(MsgDiscover, func(peer *Peer, msg *Message) error {
+		// 收到节点发现消息，回复节点信息消息
+		nodeInfo := &NodeInfo{
+			ID:        p.nodeID,
+			Address:   p.address,
+			Timestamp: time.Now().Unix(),
+		}
+		
+		// 添加已知的对等节点
+		p.mutex.RLock()
+		for id, p := range p.peers {
+			if p.IsActive {
+				nodeInfo.Peers = append(nodeInfo.Peers, id)
+			}
+		}
+		p.mutex.RUnlock()
+		
+		return p.sendMessage(peer, MsgNodeInfo, nodeInfo)
+	})
+	
+	// 注册节点信息消息处理器
+	p.RegisterMessageHandler(MsgNodeInfo, func(peer *Peer, msg *Message) error {
+		// 解析节点信息
+		var nodeInfo NodeInfo
+		err := json.Unmarshal(msg.Payload, &nodeInfo)
+		if err != nil {
+			return err
+		}
+		
+		// 更新节点信息
+		peer.LastSeen = time.Now()
+		
+		// 添加新发现的节点
+		for _, id := range nodeInfo.Peers {
+			if id != p.nodeID && id != peer.ID {
+				// TODO: 连接到新发现的节点
+			}
+		}
+		
+		return nil
+	})
+	
+	// 注册新区块消息处理器
+	p.RegisterMessageHandler(MsgNewBlock, func(peer *Peer, msg *Message) error {
+		// 解析新区块消息
+		var blockMsg NewBlockMessage
+		err := json.Unmarshal(msg.Payload, &blockMsg)
+		if err != nil {
+			return err
+		}
+		
+		// 添加区块到区块链
+		err = p.blockchain.AddBlock(blockMsg.Block)
+		if err != nil {
+			return err
+		}
+		
+		return nil
+	})
+	
+	// 注册新交易消息处理器
+	p.RegisterMessageHandler(MsgNewTx, func(peer *Peer, msg *Message) error {
+		// 解析新交易消息
+		var txMsg NewTxMessage
+		err := json.Unmarshal(msg.Payload, &txMsg)
+		if err != nil {
+			return err
+		}
+		
+		// 添加交易到区块链
+		p.blockchain.AddTransaction(txMsg.Tx)
+		
+		return nil
+	})
+	
+	// 注册请求投票消息处理器
+	p.RegisterMessageHandler(MsgRequestVote, func(peer *Peer, msg *Message) error {
+		// 解析请求投票消息
+		var request consensus.RequestVoteRequest
+		err := json.Unmarshal(msg.Payload, &request)
+		if err != nil {
+			return err
+		}
+		
+		// TODO: 处理请求投票消息
+		// 这里需要调用共识模块的handleRequestVote方法
+		// 例如：response := consensusInstance.handleRequestVote(&request)
+		
+		// 发送投票响应
+		// return p.sendMessage(peer, MsgVoteResponse, response)
+		return nil
+	})
+	
+	// 注册追加日志条目消息处理器
+	p.RegisterMessageHandler(MsgAppendEntries, func(peer *Peer, msg *Message) error {
+		// 解析追加日志条目消息
+		var request consensus.AppendEntriesRequest
+		err := json.Unmarshal(msg.Payload, &request)
+		if err != nil {
+			return err
+		}
+		
+		// TODO: 处理追加日志条目消息
+		// 这里需要调用共识模块的handleAppendEntries方法
+		// 例如：response := consensusInstance.handleAppendEntries(&request)
+		
+		// 发送追加日志响应
+		// return p.sendMessage(peer, MsgAppendResponse, response)
+		return nil
+	})
+}
+
 // 节点发现
 func (p *P2PServer) discoverNodes() {
 	ticker := time.NewTicker(5 * time.Minute)

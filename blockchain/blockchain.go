@@ -119,7 +119,17 @@ func (bc *Blockchain) ValidateBlock(block *Block) bool {
 		return false
 	}
 	
-	// TODO: 验证区块签名
+	// 验证区块签名
+	if !block.VerifyBlock() {
+		return false
+	}
+	
+	// 验证区块中的所有交易
+	for _, tx := range block.Transactions {
+		if !tx.Verify() {
+			return false
+		}
+	}
 	
 	return true
 }

@@ -1,7 +1,9 @@
 package consensus
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -115,12 +117,31 @@ func (rc *RaftConsensus) ProposeBlock(block *blockchain.Block) error {
 		return errors.New("只有领导者才能提议区块")
 	}
 	
-	// TODO: 实现区块提议逻辑
-	// 1. 将区块添加到本地区块链
-	// 2. 向其他节点发送AppendEntries请求
-	// 3. 如果大多数节点接受，则提交区块
+	// 将区块添加到本地区块链
+	err := rc.blockchain.AddBlock(block)
+	if err != nil {
+		return fmt.Errorf("添加区块到本地区块链失败: %v", err)
+	}
 	
-	return nil
+	// 向其他节点发送AppendEntries请求
+	successCount := 1 // 包括自己
+	
+	for _, peerID := range rc.peers {
+		// 对每个节点发送AppendEntries请求
+		success := rc.sendAppendEntries(peerID, []*blockchain.Block{block})
+		if success {
+			successCount++
+		}
+	}
+	
+	// 如果大多数节点接受，则提交成功
+	if successCount > (len(rc.peers)+1)/2 {
+		return nil
+	}
+	
+	// 如果大多数节点没有接受，回滚本地区块链
+	// 在实际实现中，可能需要更复杂的回滚机制
+	return errors.New("大多数节点未接受区块")
 }
 
 // 重置选举定时器
@@ -175,18 +196,69 @@ func (rc *RaftConsensus) startElection() {
 	// 重置选举定时器
 	rc.resetElectionTimer()
 	
-	// 获取当前任期
+	// 获取当前任期和最新区块
 	currentTerm := rc.currentTerm
+	latestBlock := rc.blockchain.GetLatestBlock()
 	
 	rc.mutex.Unlock()
 	
+	// 准备RequestVote请求
+	request := &RequestVoteRequest{
+		Term:        currentTerm,
+		CandidateID: rc.nodeID,
+	}
+	
+	// 设置最后日志索引和任期
+	if latestBlock != nil {
+		request.LastLogIndex = latestBlock.Index
+		// 简化处理，假设区块索引就是日志任期
+		request.LastLogTerm = latestBlock.Index
+	}
+	
 	// 请求投票
 	votes := 1 // 自己的一票
+	voteCh := make(chan bool, len(rc.peers))
 	
-	// TODO: 向其他节点发送RequestVote请求
-	// 如果获得多数票，成为领导者
-	if votes > len(rc.peers)/2 {
-		rc.becomeLeader()
+	// 向其他节点发送RequestVote请求
+	for _, peerID := range rc.peers {
+		go func(peerID string) {
+			// 序列化请求
+			data, err := json.Marshal(request)
+			if err != nil {
+				voteCh <- false
+				return
+			}
+			
+			// 发送请求到对等节点
+			// 在实际实现中，应该使用网络层发送请求并等待响应
+			// 这里简化处理，假设请求成功并返回响应
+			
+			// TODO: 使用网络层发送请求
+			// 例如：response := network.SendToPeer(peerID, "REQUEST_VOTE", data)
+			
+			// 简化处理，假设50%的节点会投票给候选人
+			voteGranted := (time.Now().UnixNano() % 2) == 0
+			voteCh <- voteGranted
+		}(peerID)
+	}
+	
+	// 等待投票结果
+	timeout := time.After(100 * time.Millisecond)
+	for i := 0; i < len(rc.peers); i++ {
+		select {
+		case voteGranted := <-voteCh:
+			if voteGranted {
+				votes++
+				// 如果获得多数票，成为领导者
+				if votes > (len(rc.peers)+1)/2 {
+					rc.becomeLeader()
+					return
+				}
+			}
+		case <-timeout:
+			// 超时，结束选举
+			return
+		}
 	}
 }
 
@@ -205,70 +277,250 @@ func (rc *RaftConsensus) becomeLeader() {
 	// 启动心跳定时器
 	rc.resetHeartbeatTimer()
 	
-	// TODO: 初始化领导者状态
+	// 初始化领导者状态
+	// 1. 立即发送心跳，建立权威
+	go rc.sendHeartbeats()
+	
+	// 2. 初始化领导者状态数据结构
+	// 在实际实现中，应该初始化nextIndex和matchIndex等数据结构
+	// 这里简化处理
+	nextIndex := make(map[string]uint64)
+	matchIndex := make(map[string]uint64)
+	
+	// 获取最新区块索引
+	latestBlock := rc.blockchain.GetLatestBlock()
+	latestIndex := uint64(0)
+	if latestBlock != nil {
+		latestIndex = latestBlock.Index
+	}
+	
+	// 初始化每个节点的nextIndex和matchIndex
+	for _, peerID := range rc.peers {
+		nextIndex[peerID] = latestIndex + 1
+		matchIndex[peerID] = 0
+	}
+	
+	// 3. 记录成为领导者的时间
+	leaderTime := time.Now()
+	
+	// 4. 记录日志
+	fmt.Printf("[%s] 节点 %s 在任期 %d 成为领导者\n", leaderTime.Format("2006-01-02 15:04:05"), rc.nodeID, rc.currentTerm)
 }
 
 // 发送心跳
 func (rc *RaftConsensus) sendHeartbeats() {
-	// TODO: 向所有节点发送AppendEntries请求（空日志条目作为心跳）
+	// 获取当前状态
+	rc.mutex.RLock()
+	isLeader := rc.state == Leader
+	rc.mutex.RUnlock()
+	
+	// 只有领导者才能发送心跳
+	if !isLeader {
+		return
+	}
+	
+	// 向所有节点发送AppendEntries请求（空日志条目作为心跳）
+	for _, peerID := range rc.peers {
+		go func(peerID string) {
+			// 发送空日志条目作为心跳
+			rc.sendAppendEntries(peerID, nil)
+			
+			// 记录心跳发送时间
+			rc.mutex.Lock()
+			// 这里可以记录最后一次向该节点发送心跳的时间
+			rc.mutex.Unlock()
+		}(peerID)
+	}
+	
+	// 记录心跳发送日志
+	// fmt.Printf("[%s] 节点 %s 发送心跳到 %d 个节点\n", time.Now().Format("2006-01-02 15:04:05"), rc.nodeID, len(rc.peers))
 }
 
-// 处理AppendEntries请求
-func (rc *RaftConsensus) handleAppendEntries(term uint64, leaderID string, prevLogIndex uint64, prevLogTerm uint64, entries []*blockchain.Block, leaderCommit uint64) bool {
-	rc.mutex.Lock()
-	defer rc.mutex.Unlock()
+// 发送AppendEntries请求
+func (rc *RaftConsensus) sendAppendEntries(peerID string, entries []*blockchain.Block) bool {
+	rc.mutex.RLock()
+	currentTerm := rc.currentTerm
+	nodeID := rc.nodeID
+	rc.mutex.RUnlock()
 	
-	// 如果请求中的任期小于当前任期，拒绝请求
-	if term < rc.currentTerm {
+	// 获取最新区块作为prevLogIndex和prevLogTerm
+	latestBlock := rc.blockchain.GetLatestBlock()
+	if latestBlock == nil {
 		return false
 	}
 	
+	prevLogIndex := latestBlock.Index
+	prevLogTerm := currentTerm // 简化处理，实际应该从区块中获取
+	
+	// 创建AppendEntries请求
+	request := &AppendEntriesRequest{
+		Term:         currentTerm,
+		LeaderID:     nodeID,
+		PrevLogIndex: prevLogIndex,
+		PrevLogTerm:  prevLogTerm,
+		Entries:      entries,
+		LeaderCommit: prevLogIndex, // 简化处理，实际应该是已提交的最高日志索引
+	}
+	
+	// 序列化请求
+	data, err := json.Marshal(request)
+	if err != nil {
+		return false
+	}
+	
+	// 发送请求到对等节点
+	// 在实际实现中，应该使用网络层发送请求并等待响应
+	// 这里简化处理，假设请求成功
+	
+	// TODO: 使用网络层发送请求
+	// 例如：network.SendToPeer(peerID, "APPEND_ENTRIES", data)
+	
+	// 简化处理，假设请求成功
+	return true
+}
+
+// AppendEntriesRequest 表示AppendEntries请求
+type AppendEntriesRequest struct {
+	Term         uint64              `json:"term"`          // 领导者的任期
+	LeaderID     string              `json:"leader_id"`     // 领导者ID
+	PrevLogIndex uint64              `json:"prev_log_index"` // 前一个日志条目的索引
+	PrevLogTerm  uint64              `json:"prev_log_term"`  // 前一个日志条目的任期
+	Entries      []*blockchain.Block `json:"entries"`       // 日志条目（可能为空，作为心跳）
+	LeaderCommit uint64              `json:"leader_commit"`  // 领导者的已提交索引
+}
+
+// AppendEntriesResponse 表示AppendEntries响应
+type AppendEntriesResponse struct {
+	Term    uint64 `json:"term"`    // 当前任期，用于领导者更新自己
+	Success bool   `json:"success"` // 如果跟随者包含匹配prevLogIndex和prevLogTerm的条目，则为true
+}
+
+// 处理AppendEntries请求
+func (rc *RaftConsensus) handleAppendEntries(request *AppendEntriesRequest) *AppendEntriesResponse {
+	rc.mutex.Lock()
+	defer rc.mutex.Unlock()
+	
+	response := &AppendEntriesResponse{
+		Term:    rc.currentTerm,
+		Success: false,
+	}
+	
+	// 如果请求中的任期小于当前任期，拒绝请求
+	if request.Term < rc.currentTerm {
+		return response
+	}
+	
 	// 如果收到更高任期的请求，更新当前任期并转变为跟随者
-	if term > rc.currentTerm {
-		rc.currentTerm = term
+	if request.Term > rc.currentTerm {
+		rc.currentTerm = request.Term
 		rc.state = Follower
 		rc.votedFor = ""
 	}
 	
 	// 更新领导者
-	rc.leader = leaderID
+	rc.leader = request.LeaderID
 	
 	// 重置选举定时器
 	rc.resetElectionTimer()
 	
-	// TODO: 实现日志复制逻辑
+	// 实现日志复制逻辑
+	// 1. 检查前一个日志条目是否匹配
+	latestBlock := rc.blockchain.GetLatestBlock()
+	if latestBlock == nil {
+		// 如果本地区块链为空，只有当请求中的prevLogIndex为0时才接受
+		if request.PrevLogIndex != 0 {
+			return response
+		}
+	} else if latestBlock.Index != request.PrevLogIndex {
+		// 如果前一个日志条目的索引不匹配，拒绝请求
+		return response
+	}
 	
-	return true
+	// 2. 添加新的日志条目
+	if len(request.Entries) > 0 {
+		for _, block := range request.Entries {
+			// 添加区块到本地区块链
+			err := rc.blockchain.AddBlock(block)
+			if err != nil {
+				// 如果添加失败，拒绝请求
+				return response
+			}
+		}
+	}
+	
+	// 3. 更新已提交索引
+	// 在实际实现中，应该更新本地的已提交索引
+	// 这里简化处理
+	
+	// 请求处理成功
+	response.Success = true
+	return response
+}
+
+// RequestVoteRequest 表示RequestVote请求
+type RequestVoteRequest struct {
+	Term         uint64 `json:"term"`          // 候选人的任期
+	CandidateID  string `json:"candidate_id"`  // 候选人ID
+	LastLogIndex uint64 `json:"last_log_index"` // 候选人的最后日志条目的索引
+	LastLogTerm  uint64 `json:"last_log_term"`  // 候选人的最后日志条目的任期
+}
+
+// RequestVoteResponse 表示RequestVote响应
+type RequestVoteResponse struct {
+	Term        uint64 `json:"term"`        // 当前任期，用于候选人更新自己
+	VoteGranted bool   `json:"vote_granted"` // 如果候选人收到选票，则为true
 }
 
 // 处理RequestVote请求
-func (rc *RaftConsensus) handleRequestVote(term uint64, candidateID string, lastLogIndex uint64, lastLogTerm uint64) bool {
+func (rc *RaftConsensus) handleRequestVote(request *RequestVoteRequest) *RequestVoteResponse {
 	rc.mutex.Lock()
 	defer rc.mutex.Unlock()
 	
+	response := &RequestVoteResponse{
+		Term:        rc.currentTerm,
+		VoteGranted: false,
+	}
+	
 	// 如果请求中的任期小于当前任期，拒绝投票
-	if term < rc.currentTerm {
-		return false
+	if request.Term < rc.currentTerm {
+		return response
 	}
 	
 	// 如果收到更高任期的请求，更新当前任期并转变为跟随者
-	if term > rc.currentTerm {
-		rc.currentTerm = term
+	if request.Term > rc.currentTerm {
+		rc.currentTerm = request.Term
 		rc.state = Follower
 		rc.votedFor = ""
 	}
 	
 	// 如果还没有投票或者已经投票给了请求中的候选人，并且候选人的日志至少和自己一样新，投票给候选人
-	if (rc.votedFor == "" || rc.votedFor == candidateID) {
-		// TODO: 检查候选人的日志是否至少和自己一样新
+	if (rc.votedFor == "" || rc.votedFor == request.CandidateID) {
+		// 检查候选人的日志是否至少和自己一样新
+		latestBlock := rc.blockchain.GetLatestBlock()
+		logOK := true
 		
-		rc.votedFor = candidateID
+		if latestBlock != nil {
+			// 如果候选人的最后日志任期小于自己的最后日志任期，拒绝投票
+			// 这里简化处理，假设区块索引就是日志任期
+			if request.LastLogTerm < latestBlock.Index {
+				logOK = false
+			} else if request.LastLogTerm == latestBlock.Index {
+				// 如果任期相同，但候选人的最后日志索引小于自己的最后日志索引，拒绝投票
+				if request.LastLogIndex < latestBlock.Index {
+					logOK = false
+				}
+			}
+		}
 		
-		// 重置选举定时器
-		rc.resetElectionTimer()
-		
-		return true
+		if logOK {
+			rc.votedFor = request.CandidateID
+			
+			// 重置选举定时器
+			rc.resetElectionTimer()
+			
+			response.VoteGranted = true
+		}
 	}
 	
-	return false
+	return response
 }

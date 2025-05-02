@@ -26,6 +26,12 @@ const (
 	MsgPong         MessageType = "PONG"          // Pong消息
 	MsgDiscover     MessageType = "DISCOVER"      // 节点发现消息
 	MsgNodeInfo     MessageType = "NODE_INFO"     // 节点信息消息
+	
+	// Raft共识相关消息
+	MsgRequestVote  MessageType = "REQUEST_VOTE"  // 请求投票消息
+	MsgVoteResponse MessageType = "VOTE_RESPONSE" // 投票响应消息
+	MsgAppendEntries MessageType = "APPEND_ENTRIES" // 追加日志条目消息
+	MsgAppendResponse MessageType = "APPEND_RESPONSE" // 追加日志响应消息
 )
 
 // Message P2P网络消息

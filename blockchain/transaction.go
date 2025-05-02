@@ -64,14 +64,40 @@ func NewTransaction(txType TransactionType, sender, receiver string, data []byte
 
 // Sign 对交易进行签名
 func (tx *Transaction) Sign(privateKey string) error {
-	// TODO: 实现签名逻辑
-	// 这里需要使用私钥对交易哈希进行签名
+	// 计算交易哈希
+	hash := tx.CalculateHash()
+	
+	// 使用私钥对哈希进行签名
+	signature, err := Sign(privateKey, []byte(hash))
+	if err != nil {
+		return err
+	}
+	
+	// 设置交易签名
+	tx.Signature = signature
 	return nil
 }
 
 // Verify 验证交易签名
 func (tx *Transaction) Verify() bool {
-	// TODO: 实现签名验证逻辑
-	// 这里需要使用发送者的公钥验证交易签名
-	return true
+	// 如果是系统交易，不需要验证签名
+	if tx.Type == TxSystem {
+		return true
+	}
+	
+	// 如果没有签名，验证失败
+	if tx.Signature == "" {
+		return false
+	}
+	
+	// 计算交易哈希
+	hash := tx.CalculateHash()
+	
+	// 使用发送者的公钥验证签名
+	valid, err := Verify(tx.Sender, []byte(hash), tx.Signature)
+	if err != nil {
+		return false
+	}
+	
+	return valid
 }
