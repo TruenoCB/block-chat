@@ -201,5 +201,9 @@ func (bc *Blockchain) clearProcessedTransactions(processedTxs []*Transaction) {
 		}
 	}
 	
+	// 更新待处理交易列表
+	bc.PendingTransactions = newPendingTxs
+}
+	
 	bc.PendingTransactions = newPendingTxs
 }

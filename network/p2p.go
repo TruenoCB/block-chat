@@ -77,18 +77,114 @@ func (p *P2PServer) readMessage(conn net.Conn) (*Message, error) {
 	return &msg, nil
 }
 
-// 处理消息
-func (p *P2PServer) handleMessage(peer *Peer, msg *Message) error {
-	p.mutex.RLock()
-	handler, exists := p.handlers[msg.Type]
-	p.mutex.RUnlock()
+// 处理连接
+func (p *P2PServer) handleConnection(conn net.Conn) {
+	defer conn.Close()
 	
-	if !exists {
-		return fmt.Errorf("未知的消息类型: %s", msg.Type)
+	// 读取节点ID和进行身份验证
+	// 首先读取握手消息
+	msg, err := p.readMessage(conn)
+	if err != nil {
+		fmt.Printf("读取握手消息失败: %v\n", err)
+		return
 	}
 	
-	return handler(peer, msg)
-}
+	// 验证消息类型
+	if msg.Type != MsgNodeInfo {
+		fmt.Printf("无效的握手消息类型: %s\n", msg.Type)
+		return
+	}
+	
+	// 解析节点信息
+	var nodeInfo NodeInfo
+	if err := json.Unmarshal(msg.Payload, &nodeInfo); err != nil {
+		fmt.Printf("解析节点信息失败: %v\n", err)
+		return
+	}
+	
+	// 使用节点ID作为对等节点ID
+	peerID := nodeInfo.ID
+	
+	// 检查是否已经存在该节点
+	p.mutex.Lock()
+	peer, exists := p.peers[peerID]
+	if !exists {
+		// 创建新的对等节点
+		peer = &Peer{
+			ID:       peerID,
+			Address:  nodeInfo.Address,
+			Conn:     conn,
+			IsActive: true,
+			LastSeen: time.Now(),
+		}
+		p.peers[peerID] = peer
+	} else {
+		// 更新现有节点
+		peer.Conn = conn
+		peer.IsActive = true
+		peer.LastSeen = time.Now()
+	}
+	p.mutex.Unlock()
+	
+	// 发送节点信息作为握手响应
+	responseInfo := &NodeInfo{
+		ID:        p.nodeID,
+		Address:   p.address,
+		Timestamp: time.Now().Unix(),
+		Peers:     []string{},
+	}
+	
+	// 添加已知的对等节点
+	p.mutex.RLock()
+	for id, knownPeer := range p.peers {
+		if knownPeer.IsActive && id != peerID {
+			responseInfo.Peers = append(responseInfo.Peers, id)
+		}
+	}
+	p.mutex.RUnlock()
+	
+	// 发送握手响应
+	err = p.sendMessage(peer, MsgNodeInfo, responseInfo)
+	if err != nil {
+		fmt.Printf("发送握手响应到节点 %s 失败: %v\n", peerID, err)
+		conn.Close()
+		return
+	}
+	
+	// 启动消息处理循环
+	go func() {
+		defer func() {
+			conn.Close()
+			
+			// 连接断开，标记为非活跃
+			p.mutex.Lock()
+			peer.IsActive = false
+			peer.Conn = nil
+			p.mutex.Unlock()
+			
+			fmt.Printf("与节点 %s (%s) 的连接已断开\n", peer.ID, peer.Address)
+		}()
+		
+		for {
+			msg, err := p.readMessage(conn)
+			if err != nil {
+				fmt.Printf("从节点 %s 读取消息失败: %v\n", peer.ID, err)
+				break
+			}
+			
+			// 更新最后通信时间
+			p.mutex.Lock()
+			peer.LastSeen = time.Now()
+			p.mutex.Unlock()
+			
+			// 处理消息
+			err = p.handleMessage(peer, msg)
+			if err != nil {
+				fmt.Printf("处理来自节点 %s 的消息失败: %v\n", peer.ID, err)
+				// 继续处理其他消息，不中断连接
+			}
+		}
+	}()
 
 // 注册默认消息处理器
 func (p *P2PServer) registerDefaultHandlers() {
@@ -190,13 +286,24 @@ func (p *P2PServer) registerDefaultHandlers() {
 			return err
 		}
 		
-		// TODO: 处理请求投票消息
 		// 这里需要调用共识模块的handleRequestVote方法
-		// 例如：response := consensusInstance.handleRequestVote(&request)
+		// 由于我们没有直接访问共识实例的方式，我们需要通过事件或回调机制
+		// 在实际实现中，应该将共识实例传递给P2PServer或使用事件总线
+		
+		// 模拟处理请求投票
+		response := &consensus.RequestVoteResponse{
+			Term:        request.Term,
+			VoteGranted: false,
+		}
+		
+		// 简单的投票逻辑：如果请求的任期大于当前任期，则投票
+		// 在实际实现中，这应该由共识模块决定
+		if request.Term > 0 { // 假设当前任期为0
+			response.VoteGranted = true
+		}
 		
 		// 发送投票响应
-		// return p.sendMessage(peer, MsgVoteResponse, response)
-		return nil
+		return p.sendMessage(peer, MsgVoteResponse, response)
 	})
 	
 	// 注册追加日志条目消息处理器
@@ -208,13 +315,33 @@ func (p *P2PServer) registerDefaultHandlers() {
 			return err
 		}
 		
-		// TODO: 处理追加日志条目消息
-		// 这里需要调用共识模块的handleAppendEntries方法
-		// 例如：response := consensusInstance.handleAppendEntries(&request)
+		// 处理追加日志条目消息
+		// 在实际实现中，应该调用共识模块的handleAppendEntries方法
+		
+		// 模拟处理追加日志条目
+		response := &consensus.AppendEntriesResponse{
+			Term:    request.Term,
+			Success: false,
+		}
+		
+		// 如果是心跳消息（没有日志条目），直接接受
+		if len(request.Entries) == 0 {
+			response.Success = true
+		} else {
+			// 如果有日志条目，尝试添加到区块链
+			for _, block := range request.Entries {
+				err := p.blockchain.AddBlock(block)
+				if err != nil {
+					// 如果添加失败，拒绝请求
+					return p.sendMessage(peer, MsgAppendResponse, response)
+				}
+			}
+			// 所有区块都添加成功
+			response.Success = true
+		}
 		
 		// 发送追加日志响应
-		// return p.sendMessage(peer, MsgAppendResponse, response)
-		return nil
+		return p.sendMessage(peer, MsgAppendResponse, response)
 	})
 }
 

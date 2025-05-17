@@ -341,6 +341,8 @@ func (p *P2PServer) registerDefaultHandlers() {
 
 // 接受新的连接
 func (p *P2PServer) acceptConnections() {
+	fmt.Printf("开始监听连接在 %s\n", p.address)
+	
 	for {
 		select {
 		case <-p.quit:
@@ -348,8 +350,17 @@ func (p *P2PServer) acceptConnections() {
 		default:
 			conn, err := p.listener.Accept()
 			if err != nil {
-				continue
+				fmt.Printf("接受连接失败: %v\n", err)
+				// 如果是临时错误，继续尝试接受连接
+				if ne, ok := err.(net.Error); ok && ne.Temporary() {
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+				// 如果是严重错误，退出循环
+				return
 			}
+			
+			fmt.Printf("接受来自 %s 的新连接\n", conn.RemoteAddr())
 			
 			// 处理新连接
 			go p.handleConnection(conn)

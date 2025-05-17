@@ -225,19 +225,30 @@ func (rc *RaftConsensus) startElection() {
 			// 序列化请求
 			data, err := json.Marshal(request)
 			if err != nil {
+				fmt.Printf("序列化RequestVote请求失败: %v\n", err)
 				voteCh <- false
 				return
 			}
 			
 			// 发送请求到对等节点
 			// 在实际实现中，应该使用网络层发送请求并等待响应
-			// 这里简化处理，假设请求成功并返回响应
 			
-			// TODO: 使用网络层发送请求
-			// 例如：response := network.SendToPeer(peerID, "REQUEST_VOTE", data)
+			// 由于我们没有直接访问网络层的方式，我们需要通过事件或回调机制
+			// 在实际实现中，应该将网络层实例传递给RaftConsensus或使用事件总线
 			
-			// 简化处理，假设50%的节点会投票给候选人
+			// 模拟发送请求
+			fmt.Printf("发送RequestVote请求到节点 %s\n", peerID)
+			
+			// 在实际实现中，应该等待响应并解析结果
+			// 这里简化处理，模拟随机投票结果
 			voteGranted := (time.Now().UnixNano() % 2) == 0
+			
+			if voteGranted {
+				fmt.Printf("节点 %s 投票给候选人 %s\n", peerID, rc.nodeID)
+			} else {
+				fmt.Printf("节点 %s 拒绝投票给候选人 %s\n", peerID, rc.nodeID)
+			}
+			
 			voteCh <- voteGranted
 		}(peerID)
 	}
@@ -365,17 +376,22 @@ func (rc *RaftConsensus) sendAppendEntries(peerID string, entries []*blockchain.
 	// 序列化请求
 	data, err := json.Marshal(request)
 	if err != nil {
+		fmt.Printf("序列化AppendEntries请求失败: %v\n", err)
 		return false
 	}
 	
 	// 发送请求到对等节点
 	// 在实际实现中，应该使用网络层发送请求并等待响应
+	// 这里我们需要通过网络层发送消息
+	
+	// 由于我们没有直接访问网络层的方式，我们需要通过事件或回调机制
+	// 在实际实现中，应该将网络层实例传递给RaftConsensus或使用事件总线
+	
+	// 模拟发送请求
+	fmt.Printf("发送AppendEntries请求到节点 %s\n", peerID)
+	
+	// 在实际实现中，应该等待响应并返回结果
 	// 这里简化处理，假设请求成功
-	
-	// TODO: 使用网络层发送请求
-	// 例如：network.SendToPeer(peerID, "APPEND_ENTRIES", data)
-	
-	// 简化处理，假设请求成功
 	return true
 }
 

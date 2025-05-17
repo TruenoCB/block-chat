@@ -106,15 +106,36 @@ func (uc *UserContract) Execute(tx *blockchain.Transaction) ([]byte, error) {
 		return nil, err
 	}
 	
-	// 确保公钥与发送者一致
+	// 确保用户公钥与交易发送者一致
 	if user.PublicKey != tx.Sender {
 		return nil, errors.New("用户公钥与交易发送者不匹配")
 	}
 	
-	// 保存或更新用户信息
-	uc.users[user.PublicKey] = &user
+	// 检查用户是否已存在
+	existingUser, exists := uc.users[user.PublicKey]
 	
-	return json.Marshal(user)
+	if exists {
+		// 更新用户信息
+		existingUser.Username = user.Username
+		existingUser.Avatar = user.Avatar
+		existingUser.Bio = user.Bio
+		
+		return json.Marshal(map[string]interface{}{
+			"action": "update_user",
+			"user":   existingUser,
+			"status": "success",
+		})
+	} else {
+		// 创建新用户
+		user.CreatedAt = time.Now().Unix()
+		uc.users[user.PublicKey] = &user
+		
+		return json.Marshal(map[string]interface{}{
+			"action": "create_user",
+			"user":   user,
+			"status": "success",
+		})
+	}
 }
 
 // Validate 验证用户交易
